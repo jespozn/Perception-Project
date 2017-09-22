@@ -7,8 +7,6 @@ import sklearn
 from sklearn.preprocessing import LabelEncoder
 import pickle
 from sensor_stick.srv import GetNormals
-#from sensor_stick.features import compute_color_histograms
-#from sensor_stick.features import compute_normal_histograms
 from visualization_msgs.msg import Marker
 from sensor_stick.marker_tools import *
 from sensor_stick.msg import DetectedObjectsArray
@@ -53,15 +51,13 @@ def VGD(cloud):
     vox = cloud.make_voxel_grid_filter()
 
     # Choose a voxel (also known as leaf) size
-    LEAF_SIZE = 0.01
+    LEAF_SIZE = 0.005
 
     # Set the voxel (or leaf) size
     vox.set_leaf_size(LEAF_SIZE, LEAF_SIZE, LEAF_SIZE)
 
     # Call the filter function to obtain the resultant downsampled point cloud
     cloud_filtered = vox.filter()
-    # filename = 'voxel_downsampled.pcd'
-    # pcl.save(cloud_filtered, filename)
 
     return cloud_filtered
 
@@ -96,8 +92,6 @@ def passT_filter(cloud):
     passthrough.set_filter_limits(axis_min, axis_max)
     # Finally use the filter function to obtain the resultant point cloud.
     cloud_filtered = passthrough.filter()
-    #filename = 'pass_through_filtered.pcd'
-    #pcl.save(cloud_filtered, filename)
 
     passthrough = cloud_filtered.make_passthrough_filter()
     filter_axis = 'y'
@@ -142,7 +136,7 @@ def rgb_to_hsv(rgb_list):
     hsv_normalized = matplotlib.colors.rgb_to_hsv([[rgb_normalized]])[0][0]
     return hsv_normalized
 
-def compute_color_histograms(cloud, using_hsv=False, nbins=64, bins_range=(0, 256)):
+def compute_color_histograms(cloud, using_hsv=False, nbins=32, bins_range=(0, 256)):
     # Compute histograms for the clusters
     point_colors_list = []
 
@@ -174,7 +168,7 @@ def compute_color_histograms(cloud, using_hsv=False, nbins=64, bins_range=(0, 25
     normed_features = hist_features / np.sum(hist_features)
     return normed_features
 
-def compute_normal_histograms(normal_cloud, nbins=64, bins_range=(-1, 1)):
+def compute_normal_histograms(normal_cloud, nbins=32, bins_range=(-1, 1)):
     norm_x_vals = []
     norm_y_vals = []
     norm_z_vals = []
@@ -200,18 +194,24 @@ def compute_normal_histograms(normal_cloud, nbins=64, bins_range=(-1, 1)):
 # Callback function for your Point Cloud Subscriber
 def pcl_callback(pcl_msg):
 
+    print 'pcl_msg received...'
+
 # Exercise-2 TODOs:
 
     # Convert ROS msg to PCL data
     cloud = ros_to_pcl(pcl_msg)
-    
+    filename = 'original.pcd'
+    pcl.save(cloud, filename)
+
     # Statistical Outlier Filtering
     outlier_filtered = stat_filter(cloud)
+    filename = 'stat_filter.pcd'
+    pcl.save(outlier_filtered, filename)
 
     # Voxel Grid Downsampling
     voxel_downsampled = VGD(outlier_filtered)
-    #filename = 'voxel_downsampled.pcd'
-    #pcl.save(voxel_downsampled, filename)
+    filename = 'voxel_downsampled.pcd'
+    pcl.save(voxel_downsampled, filename)
 
     # PassThrough Filter
     passT_filtered = passT_filter(voxel_downsampled)
@@ -223,7 +223,11 @@ def pcl_callback(pcl_msg):
 
     # Extract inliers and outliers
     cloud_table = passT_filtered.extract(inliers, negative=False)
+    filename = 'cloud_table.pcd'
+    pcl.save(cloud_table, filename)
     cloud_objects = passT_filtered.extract(inliers, negative=True)
+    filename = 'cloud_objects.pcd'
+    pcl.save(cloud_objects, filename)
 
     # Euclidean Clustering
     white_cloud = XYZRGB_to_XYZ(cloud_objects)
@@ -256,6 +260,8 @@ def pcl_callback(pcl_msg):
     # Create new cloud containing all clusters, each with unique color
     cluster_cloud = pcl.PointCloud_PointXYZRGB()
     cluster_cloud.from_list(color_cluster_point_list)
+    filename = 'cluster.pcd'
+    pcl.save(cluster_cloud, filename)
 
     # Convert PCL data to ROS messages
     ros_cloud_objects = pcl_to_ros(cloud_objects)
@@ -293,9 +299,7 @@ def pcl_callback(pcl_msg):
 
         # Publish a label into RViz
         label_pos = list(white_cloud[pts_list[0]])
-        #print 'label_pos', label_pos
         label_pos[2] += .3        # .4
-        #print 'label_pos', label_pos
         object_markers_pub.publish(make_label(label, label_pos, index))
 
         # Add the detected object to the list of detected objects.
@@ -319,8 +323,6 @@ def pcl_callback(pcl_msg):
 
 # function to load parameters and request PickPlace service
 def pr2_mover(object_list, object_labels):
-
-    #print 'object_labels: ', object_labels
 
     # Initialize variables
     test_scene_num = Int32()
@@ -371,21 +373,16 @@ def pr2_mover(object_list, object_labels):
             pick_pose.orientation.w = 0
 
             # Create 'place_pose' for the object
-            if object_group == 'red':
-                i = 0
-                # Assign the arm to be used for pick_place
-                arm.data = 'left'
-            else:
-                i = 1
-                # Assign the arm to be used for pick_place
-                arm.data = 'right'
-            place_pose.position.x = dropbox_position[1][0]
-            place_pose.position.y = dropbox_position[1][1]
-            place_pose.position.z = dropbox_position[1][2]
+            i = dropbox_group.index(object_group)
+            place_pose.position.x = dropbox_position[i][0]
+            place_pose.position.y = dropbox_position[i][1]
+            place_pose.position.z = dropbox_position[i][2]
             place_pose.orientation.x = 0
             place_pose.orientation.y = 0
             place_pose.orientation.z = 0
             place_pose.orientation.w = 0
+            # Create arm name
+            arm.data = dropbox_name[i]
 
             # Create a list of dictionaries (made with make_yaml_dict()) for later output to yaml format
             # Populate various ROS messages
@@ -409,6 +406,7 @@ def pr2_mover(object_list, object_labels):
     # Output your request parameters into output yaml file
     send_to_yaml('out.yaml', dict_list)
 
+    print 'Iteration end'
 
 if __name__ == '__main__':
 
